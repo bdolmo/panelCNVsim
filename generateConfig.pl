@@ -8,10 +8,10 @@ use Sort::Key::Natural qw(natsort);
 use File::Basename;
 use Getopt::Long;
 
-my $bamDir   = $ARGV[0];
-my $ROI_file = $ARGV[1];
-my $mode     = $ARGV[2];
-my $cnv_type = $ARGV[3];
+my $bamDir;
+my $ROI_file;
+my $mode;
+my $cnv_type;
 my $autosomes = 0;
 
 # Min max sizes for partial cnvs
@@ -74,7 +74,8 @@ if (!$maxExons){
 
 if ($minExons && $maxExons){
 	if ($minExons > $maxExons){
-		print " ERROR: --minexons must be greater than --maxexons\n";  
+		print " ERROR: --maxexons must be greater than --minexons\n";   
+		exit;
 	} 	
 } 
 
@@ -83,20 +84,22 @@ my $samtools = `which samtools`;
 chomp $samtools;
 
 if (!$samtools) {
-	print " ERROR: samtools was not found on path\n"; exit;
+	print " ERROR: samtools was not found on path\n"; 
+	exit;
 }
 
 our @bams = glob ("$bamDir/*.bam");
 if (!@bams) {
-	print " ERROR: no BAM files were found on $bamDir directory!\n"; exit;
+	print " ERROR: no BAM files were found on $bamDir directory!\n"; 
+	exit;
 }
 
 my @ARRAY = ();
 my %Exon  = ();
 our %ExonCount = ();
-our %GeneHash = ();
+our %GeneHash  = ();
 our %seen_gene = ();
-our %seen_whole = ();
+our %seen_whole= ();
 
 open (IN, "<", $ROI_file) || die " ERROR: Unable to open $ROI_file\n";
 while (my $line=<IN>) {
@@ -112,14 +115,21 @@ while (my $line=<IN>) {
 	$Exon{"$tmp[0]\t$tmp[1]\t$tmp[2]"} = $tmp[3];
 	my $gene = $tmp[3]; 
 
+	if ($gene =~/.{1,}_.{1,}_.{1,}_.{1,};.{1,}$/) {
+		my @tmpGene = split(/;/, $gene);
+		$gene = $tmpGene[1]; 
+	} 
+
 	$ExonCount{$gene}++;
 	$GeneHash{$gene}{$ExonCount{$gene}} = "$tmp[0]\t$tmp[1]\t$tmp[2]\n";
 	push @ARRAY, $line;
 }
 close IN;
 
+
 my %seen = ();
 my $count = 1;
+
 foreach my $bam (natsort@bams) {
 
 	my ($chr, $start, $end, $gene);
@@ -190,8 +200,8 @@ sub getSingleExon {
 		} 
 	}	
 
-	$start = $start-10;
-	$end += 10;
+	$start = $start-500;
+	$end += 500;
 	return ($chr, $start, $end, $info);
 }
 
@@ -202,6 +212,7 @@ sub getMultipleExon {
 
 	# Conditions: gene must have >= chosen_N
 	my $chosen_N = int ($minExons+rand($maxExons-$minExons));
+
 	my $selectedGene;
 	my $counter = 0;
 
@@ -210,19 +221,35 @@ sub getMultipleExon {
 		if ($counter == scalar @ARRAY) {
 			$chosen_N-- if $chosen_N >= 2;
 			$counter = 0;
-		}  
+		}
+
 		my $index = int (rand (scalar @ARRAY));
 		my ($chr, $start, $end, $info) = split (/\t/, $ARRAY[$index]);
 		my $gene = $info;
+		if ($gene =~/.{1,}_.{1,}_.{1,}_.{1,};.{1,}$/) {
+			my @tmpGene = split(/;/, $gene);
+			$gene = $tmpGene[1]; 
+		} 
+
 		if ($ExonCount{$gene} >= $chosen_N) {
 			$selectedGene = $gene;
 
 			$seen_gene{$gene}++;
+			my ($chrPrev, $startPrev, $endPrev, $infoPrev) = split (/\t/, $ARRAY[$index-1]);
+			my ($chrNext, $startNext, $endNext, $infoNext) = split (/\t/, $ARRAY[$index+1]);
+
 			if ($seen_gene{$gene} > 1) {
 				next;
 			}
 			else {
 				last;
+			}
+
+			if ($chr eq $chrPrev && $chr eq $chrNext){
+				if ($start > $endPrev+500 && $startNext > $end+500){
+					$seen{$ARRAY[$index]}++;
+					last;
+				}  
 			}
 		}	
 	}

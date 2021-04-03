@@ -1,1 +1,1 @@
-/home/usuari/Desktop/bams/RB20029_9999999.rmdup.bam	chr1	162039970	162040040	NM_014697,NM_001164757_0_1;NOS1AP	DEL	1	partial
+/home/usuari/Desktop/bams/RB20029_9999999.rmdup.bam	chr1	162039970	162040040	NM_014697,NM_001164757_0_1;NOS1AP	DUP	1	partial

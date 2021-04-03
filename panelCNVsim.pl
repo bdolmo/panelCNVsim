@@ -14,13 +14,15 @@ my $ROI_file;
 my $genome;
 my $outDir;
 my $keepTmp;
+my $breakpoint;
 
 Help () if (@ARGV < 4 or !GetOptions(
 	'b|bed=s' =>\$ROI_file,
 	'g|genome=s' =>\$genome,
 	'c|config=s' =>\$cnv_list,
 	'o|outdir=s' =>\$outDir,
-	'keep_tmp' =>\$keepTmp 
+	'keep_tmp' =>\$keepTmp,
+	'breakpoint' =>\$breakpoint, 
 	)
 );	
 my $dirname = dirname(__FILE__);
@@ -118,7 +120,7 @@ my $unmap = "tgccaacgatgctgttatcgctaattcagttgctcaggcacgcttttcaggcttgttgattgccaac
 
 my %HoS = getSampleInfo($cnv_list, $outDir);
 my $N = 0;
-foreach my $bam ( sort keys %HoS ) {
+foreach my $bam ( natsort keys %HoS ) {
 	$N++;
 	next if $HoS{$bam}{CNV} eq "none";
 	my @cnvs = @{$HoS{$bam}{CNV}};
@@ -128,15 +130,14 @@ foreach my $bam ( sort keys %HoS ) {
 
 	foreach my $cnv (@cnvs) {
 
-		my @tmp = split (/\t/, $cnv);
 		print " INFO:$bam Processing $cnv\n";
+		my @tmp = split (/\t/, $cnv);
 		my $chrCnv  = $tmp[0];
 		my $startCnv= $tmp[1];
 		my $endCnv  = $tmp[2];
 		my $cnvType = $tmp[4];
 		my $ploidy  = $tmp[5];
 		my $mode    = $tmp[6];
-
 
 		my $startOffset = $startCnv-250;
 		my $endOffset   = $endCnv+250;
@@ -236,8 +237,11 @@ foreach my $bam ( sort keys %HoS ) {
 
 		foreach my $read (sort keys %ReadName){
 
-			next if $ReadName{$read}{COUNT} < 2;
-
+			if ($ReadName{$read}{COUNT} < 2) {
+				print " SKIPPING $read\n";
+				next;
+			} 
+			$ReadName{$read}{CNVTYPE} = $cnvType; 
 			# Both reads outisde the variant 
 			if ($ReadName{$read}{LEFT}{END} <= $startCnv && $ReadName{$read}{RIGHT}{POS} >= $endCnv){ 
 				$ReadName{$read}{CLASS} = "OUTSIDE";
@@ -279,7 +283,7 @@ foreach my $bam ( sort keys %HoS ) {
 			if ($ReadName{$read}{LEFT}{POS} < $startCnv && $ReadName{$read}{LEFT}{END} > $startCnv
 				&& $ReadName{$read}{RIGHT}{POS} >= $startCnv && $ReadName{$read}{RIGHT}{END} <= $endCnv ) {
 				$ReadName{$read}{CLASS} = "LEFT_OVERLAP_RIGHT_INSIDE";
-				$ReadName{$read}{OLAP} = 1;	
+				$ReadName{$read}{OLAP}  = 1;	
 				$ReadName{$read}{"5PRIME"} = 1;
 				$ReadName{$read}{"3PRIME"} = 0;
 			} 
@@ -288,7 +292,7 @@ foreach my $bam ( sort keys %HoS ) {
 			if ($ReadName{$read}{LEFT}{POS} >= $startCnv && $ReadName{$read}{LEFT}{END} <= $endCnv
 				&& $ReadName{$read}{RIGHT}{POS} < $endCnv && $ReadName{$read}{RIGHT}{END} > $endCnv ) {
 				$ReadName{$read}{CLASS} = "LEFT_INSIDE_RIGHT_OVERLAP";
-				$ReadName{$read}{OLAP} = 1;	
+				$ReadName{$read}{OLAP}  = 1;	
 				$ReadName{$read}{"5PRIME"} = 0;
 				$ReadName{$read}{"3PRIME"} = 1;
 			} 
@@ -348,28 +352,17 @@ foreach my $bam ( sort keys %HoS ) {
 				$ReadName{$read}{"5PRIME"} = 0;
 				$ReadName{$read}{"3PRIME"} = 1;
 				next;
-
 			} 
 			# Both reads overlapping 5' and 3' breakpoints
 			if ($ReadName{$read}{LEFT}{POS} < $startCnv && $ReadName{$read}{LEFT}{END} > $startCnv
 				&& $ReadName{$read}{RIGHT}{POS} < $endCnv && $ReadName{$read}{RIGHT}{END} > $endCnv){
-				print "$ReadName{$read}{CHANGED}\t$read\t$startCnv-$endCnv\t$ReadName{$read}{LEFT}{CHR}:$ReadName{$read}{LEFT}{POS}-$ReadName{$read}{LEFT}{END}";
-			    print "\t$ReadName{$read}{RIGHT}{CHR}:$ReadName{$read}{RIGHT}{POS}-$ReadName{$read}{RIGHT}{END}\n";	
-				$ReadName{$read}{CLASS} = "LEFT_OVERLAP_RIGHT_OVERLAP";
-				$ReadName{$read}{OLAP} = 1;
+				$ReadName{$read}{CLASS}    = "LEFT_OVERLAP_RIGHT_OVERLAP";
+				$ReadName{$read}{OLAP}     = 1;
 				$ReadName{$read}{"5PRIME"} = 1;
 				$ReadName{$read}{"3PRIME"} = 1;
-				if ($read eq 'M03954:226:000000000-CT6B3:1:2119:25640:19220'){
-					#print "seems here\n";
-				} 
 				next;
-
 			} 
 
-			if (!$ReadName{$read}{CLASS}){
-				print "$read\t$startCnv-$endCnv\t$ReadName{$read}{LEFT}{CHR}:$ReadName{$read}{LEFT}{POS}-$ReadName{$read}{LEFT}{END}";
-			    print "\t$ReadName{$read}{RIGHT}{CHR}:$ReadName{$read}{RIGHT}{POS}-$ReadName{$read}{RIGHT}{END}\n";	
-			} 
 		} 
 		my $href = simulateCnv(\%ReadName, $chrCnv, $startCnv, $endCnv, $cnvType, $mode, $HoS{$bam}{READ_LENGTH}, $genome );
 		%ReadName = %$href;
@@ -377,10 +370,11 @@ foreach my $bam ( sort keys %HoS ) {
 
 	if (!-e $HoS{$bam}{FQ1} && !-e $HoS{$bam}{FQ1}){
 		open (FQ1, ">", $HoS{$bam}{FQ1}) || die " ERROR: Unable to open $HoS{$bam}{FQ1}\n"; 
-		open (FQ2, ">", $HoS{$bam}{FQ2})  || die " ERROR: Unable to open $HoS{$bam}{FQ2}\n"; 
+		open (FQ2, ">", $HoS{$bam}{FQ2}) || die " ERROR: Unable to open $HoS{$bam}{FQ2}\n"; 
 
 		# Rewriting new FASTQ files
 		my %seen = ();
+		my $duplicatedCount = 0;
 		open BAM,"$samtools view -h $bam |";
 		while (my $line=<BAM>) {
 			next if $line=~/^\@/;
@@ -396,14 +390,19 @@ foreach my $bam ( sort keys %HoS ) {
 				next;
 			}
 			if ($ReadName{$rname}{CLASS} ){
-				#next if !$ReadName{$rname}{EDITED};
-				#next if $ReadName{$rname}{CLASS} ne 'LEFT_OVERLAP_RIGHT_OVERLAP';
+				my $cnvType = $ReadName{$rname}{CNVTYPE};
+
 				# First read 
 				if ($flag & 0x40 && $flag & 0x2){
 					$ReadName{$rname}{LEFT}{SEQ} = $ReadName{$rname}{LEFT}{FLAG} & 0x10 
 						? revcomp($ReadName{$rname}{LEFT}{SEQ}) : $ReadName{$rname}{LEFT}{SEQ};
 					$qual = "E" x length($ReadName{$rname}{LEFT}{SEQ});
 					print FQ1 "\@$rname\n$ReadName{$rname}{LEFT}{SEQ}\n+\n$qual\n";
+					if ($cnvType =~/dup/i) {
+						if ($ReadName{$rname}{DUPLICATED} ) {
+							print FQ1 "\@dup$rname\n$ReadName{$rname}{LEFT}{SEQ}\n+\n$qual\n";
+						}
+					}   
 				}
 				# Second read 
 				if ($flag & 0x80 && $flag & 0x2){
@@ -411,9 +410,14 @@ foreach my $bam ( sort keys %HoS ) {
 						? revcomp($ReadName{$rname}{RIGHT}{SEQ}) : $ReadName{$rname}{RIGHT}{SEQ};
 					$qual = "E" x length($ReadName{$rname}{RIGHT}{SEQ});
 					print FQ2 "\@$rname\n$ReadName{$rname}{RIGHT}{SEQ}\n+\n$qual\n";
+					if ($cnvType =~/dup/i) {
+						if ($ReadName{$rname}{DUPLICATED}) {
+							print FQ2 "\@dup$rname\n$ReadName{$rname}{RIGHT}{SEQ}\n+\n$qual\n";						
+						} 
+					}				
 				}
 			} 
-			else{
+			else {
 				if ($flag & 0x40 && $flag & 0x2){
 					print FQ1 "\@$rname\n$seq\n+\n$qual\n";
 				}
@@ -439,8 +443,8 @@ foreach my $bam ( sort keys %HoS ) {
 		system $cmd;
 	} 
 
-	$cmd = "$bwa mem -t 4 -R \'\@RG\\tID:$HoS{$bam}{NAME}\\tSM:$HoS{$bam}{NAME}\' $genome $sortedFq1 $sortedFq2";
-	$cmd .=" | $samtools sort -O BAM -o $outDir/$HoS{$bam}{NAME}.simulated.bam - $devNull";
+	$cmd  = "$bwa mem -t 7 -R \'\@RG\\tID:$HoS{$bam}{NAME}\\tSM:$HoS{$bam}{NAME}\' $genome $sortedFq1 $sortedFq2";
+	$cmd .= " | $samtools sort -O BAM -o $outDir/$HoS{$bam}{NAME}.simulated.bam - $devNull";
 	system $cmd;
 
 	$cmd = " $samtools index $outDir/$HoS{$bam}{NAME}.simulated.bam";
@@ -450,7 +454,7 @@ foreach my $bam ( sort keys %HoS ) {
 		unlink($HoS{$bam}{FQ1}, $HoS{$bam}{FQ2}, $sortedFq1, $sortedFq2 );
 	} 
 
-	exit;
+	#exit;
 # my $cmd = "$cat $HoS{$bam}{NAME}_1.fq | $paste - - - - | $sort -k1,1 -t \" \" | $tr \"\t\" \"\n\" > $HoS{$bam}{NAME}_1.sorted.fq";
 # system $cmd;
 
@@ -476,18 +480,34 @@ sub generateCnvSequence {
 		# For segment A 	
 		my $startA = $startCnv-$readLength-1;
 		my $endA   = $startCnv-1;
-		my $seqA   = `$samtools faidx $genomeFasta $chrCnv:$startA-$endA | grep -v '>' `;
+		my $seqA   = `$samtools faidx $genomeFasta $chrCnv:$startA-$endA | $grep -v '>' `;
 		$seqA =~s/\n//g; 
 
 		# For segment B
 		my $startB = $endCnv;
 		my $endB   = $endCnv+$readLength; 
-		my $seqB   = `$samtools faidx $genomeFasta $chrCnv:$startB-$endB  | grep -v '>'`;
+		my $seqB   = `$samtools faidx $genomeFasta $chrCnv:$startB-$endB  | $grep -v '>'`;
 		$seqB =~s/\n//g; 
 		$seq = $seqA.$seqB;
 	} 
 	if ($cnvType =~/dup/i ){
-		
+		my $startA = $startCnv-$readLength-1;
+		my $endA   = $startCnv-1;
+		my $seqA   = `$samtools faidx $genomeFasta $chrCnv:$startA-$endA | $grep -v '>' `;
+		$seqA =~s/\n//g; 
+
+		# For segment B
+		my $startB = $startCnv;
+		my $endB   = $endCnv; 
+		my $seqB   = `$samtools faidx $genomeFasta $chrCnv:$startB-$endB  | $grep -v '>'`;
+		$seqB =~s/\n//g; 
+
+		# For segment C
+		my $startC = $endCnv;
+		my $endC   = $endCnv+$readLength; 
+		my $seqC   = `$samtools faidx $genomeFasta $chrCnv:$startC-$endC  | $grep -v '>'`;
+		$seqC =~s/\n//g; 
+		$seq = $seqA.$seqB.$seqB.$seqC;	
 	} 
 	return $seq;
 } 
@@ -504,10 +524,11 @@ sub simulateCnv {
 	my $genomeFasta= shift;
 
 	my $seq =  generateCnvSequence($chrCnv, $startCnv, $endCnv, $cnvType, $readLength, $genomeFasta);
-
+	my $cnvLength = $endCnv-$startCnv;
 	my %readHash = %$href;
 	my $totalReads = 0;
 	my $totalEdited = 0;
+	
 	foreach my $read (sort keys %readHash) {
 
 		next if !$readHash{$read}{CLASS};  
@@ -519,80 +540,145 @@ sub simulateCnv {
 		# edit reads at a 50% chance
 		my $edit = int(rand(1)+0.5);
 		$totalEdited++ if $edit;
+		my $duplicated = int(rand(1)+0.5);
 		if ($edit){
 			$readHash{$read}{EDITED} = 1; 
 		}
 		else{
 			$readHash{$read}{EDITED} = 0; 
 		} 
+		if ($duplicated) {
+			$readHash{$read}{DUPLICATED} = 1; 
+		}
+		else{
+			$readHash{$read}{DUPLICATED} = 0; 
+		} 
 		if ($edit) {
 			# For breakpoint non-overlapping paired reads
 			if ($readHash{$read}{OLAP} == 0) {
-				if ($readHash{$read}{CLASS} eq 'INSIDE'){
-					$readHash{$read}{LEFT}{SEQ}  
-						= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}) ); 
-					$readHash{$read}{RIGHT}{SEQ} 
-						= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}) ); 
+				if ($cnvType =~/del/i) { 
+					if ($readHash{$read}{CLASS} eq 'INSIDE'){
+						$readHash{$read}{LEFT}{SEQ}  
+							= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}) ); 
+						$readHash{$read}{RIGHT}{SEQ} 
+							= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}) ); 
+					} 
+					elsif ($readHash{$read}{CLASS} eq 'LEFT_OUTSIDE_RIGHT_INSIDE'){
+						$readHash{$read}{RIGHT}{SEQ} 
+							= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}) ); 
+					} 
+					elsif ($readHash{$read}{CLASS} eq 'LEFT_INSIDE_RIGHT_OUTSIDE'){
+						$readHash{$read}{LEFT}{SEQ}  
+							= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}) ); 
+					}
 				} 
-				if ($readHash{$read}{CLASS} eq 'LEFT_OUTSIDE_RIGHT_INSIDE'){
-					$readHash{$read}{RIGHT}{SEQ} 
-						= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}) ); 
-				} 
-				if ($readHash{$read}{CLASS} eq 'LEFT_INSIDE_RIGHT_OUTSIDE'){
-					$readHash{$read}{LEFT}{SEQ}  
-						= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}) ); 
-				}
+				#print "INSIDE\n";
 			} 
 			# For breakpoint-overlapping paired reads
 			if ($readHash{$read}{OLAP} == 1) {
-
 				if ($readHash{$read}{CLASS} eq "LEFT_OVERLAP_RIGHT_INSIDE"){
 					# Modify left read
-					my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
-					my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
+					if ($cnvType =~/del/i) { 
+						my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+						my $segmentA   = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
 
-					my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
-					my $segmentB = substr($seq, $readLength, $segbLength);
+						my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+						my $segmentB   = substr($seq, $readLength, $segbLength);
 
-					my $newSeq = $segmentA . $segmentB;
-					$readHash{$read}{LEFT}{SEQ} = $newSeq;
-					$readHash{$read}{RIGHT}{SEQ}
-						= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}));
+						my $newSeq = $segmentA . $segmentB;
+						$readHash{$read}{LEFT}{SEQ} = $newSeq;
+						$readHash{$read}{RIGHT}{SEQ}
+							= substr($unmap, 0, length($readHash{$read}{RIGHT}{SEQ}));
+					}
+					if ($cnvType =~/dup/i){
+						my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+						my $segmentA = substr($seq, $readLength+$cnvLength-$segaLength, $segaLength);
+
+						my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+						my $segmentB = substr($readHash{$read}{LEFT}{SEQ}, $segaLength, $segbLength);
+
+						my $newSeq = $segmentA . $segmentB;
+						$readHash{$read}{LEFT}{SEQ} = $newSeq;
+						print "1\t$newSeq\n";			
+					} 
 				} 
 				if ($readHash{$read}{CLASS} eq "LEFT_INSIDE_RIGHT_OVERLAP"){
-
-					# Modify right read
-					my $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
-					my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
-
-					my $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
-					my $segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength+1, $segbLength);
-					my $newSeq = $segmentA . $segmentB;
-					$readHash{$read}{RIGHT}{SEQ} = $newSeq;
-					$readHash{$read}{LEFT}{SEQ}
-						= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}));
-				}
-				if ($readHash{$read}{CLASS} eq "LEFT_OUTSIDE_RIGHT_OVERLAP"){
-
-					if ($readHash{$read}{"5PRIME"}){  
-						my $segaLength = $startCnv-$readHash{$read}{RIGHT}{POS};
-						my $segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
-						
-						my $segbLength = $readHash{$read}{RIGHT}{END}-$startCnv; 
-						my $segmentB = substr($seq, $readLength+1, $segbLength);
-						my $newSeq = $segmentA . $segmentB;
-						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
-					 	#print "$newSeq\n";
-					}
-					if ($readHash{$read}{"3PRIME"}){
+					print "LEFT_INSIDE_RIGHT_OVERLAP\n";
+					print "$cnvType\n";
+					if ($cnvType =~/del/i) { 
+						# Modify right read
 						my $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
 						my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
-						#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
-						
+
 						my $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
 						my $segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength+1, $segbLength);
 						my $newSeq = $segmentA . $segmentB;
+							print "$newSeq\n";
 						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						$readHash{$read}{LEFT}{SEQ}
+							= substr($unmap, 0, length($readHash{$read}{LEFT}{SEQ}));
+					}
+					if ($cnvType =~/dup/i) { 
+						# Modify right read
+						my $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+						my $segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
+						#my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
+
+						my $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+						my $segmentB = substr($seq, $readLength, $segbLength);
+						my $newSeq = $segmentA . $segmentB;
+						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						print "2\t$newSeq\n";			
+
+					} 
+				}
+				if ($readHash{$read}{CLASS} eq "LEFT_OUTSIDE_RIGHT_OVERLAP"){
+
+					if ($readHash{$read}{"5PRIME"}){ 
+
+						if ($cnvType =~/del/i) {
+							my $segaLength = $startCnv-$readHash{$read}{RIGHT}{POS};
+							my $segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
+							
+							my $segbLength = $readHash{$read}{RIGHT}{END}-$startCnv; 
+							my $segmentB = substr($seq, $readLength+1, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						} 
+						if ($cnvType =~/dup/i) {
+							my $segaLength = $startCnv-$readHash{$read}{RIGHT}{POS};
+							my $segmentA = substr($seq, $readLength+$cnvLength-$segaLength, $segaLength);
+
+							my $segbLength = $readHash{$read}{RIGHT}{END}-$startCnv; 
+							my $segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength, $segbLength);
+
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+							print "3\t$newSeq\n";		
+						} 
+					}
+					if ($readHash{$read}{"3PRIME"}){
+						if ($cnvType =~/del/i) {
+							my $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+							my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
+							#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
+							
+							my $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+							my $segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength+1, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						}
+						if ($cnvType =~/dup/i) {
+							# Modify right read
+							my $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+							my $segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
+
+							my $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+							my $segmentB = substr($seq, $readLength, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+							print "4\t$newSeq\n";			
+						}	
 					 	#print "$newSeq\n";
 					} 
 				# 	# print length($newSeq). "\n\n";
@@ -600,118 +686,157 @@ sub simulateCnv {
 				if ($readHash{$read}{CLASS} eq "LEFT_OVERLAP_RIGHT_OUTSIDE"){
 
 					if ($readHash{$read}{"5PRIME"}){
-						my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
-						my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
-						#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
-						
-						my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
-						my $segmentB = substr($seq, $readLength+1, $segbLength);
-						my $newSeq = $segmentA . $segmentB;
-						$readHash{$read}{LEFT}{SEQ} = $newSeq;
-						#print "$newSeq\n";
+						if ($cnvType =~/del/i) { 
+							my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
+							#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
+							
+							my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+							my $segmentB = substr($seq, $readLength+1, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							#print "$newSeq\n";
+						}
+						if ($cnvType =~/dup/i) { 
+							my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = substr($seq, $readLength+$cnvLength-$segaLength, $segaLength);
+
+							my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+							my $segmentB = substr($readHash{$read}{LEFT}{SEQ}, $segaLength, $segbLength);
+
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							print "5\t$newSeq\n";	
+						}	
 					}	
 					if ($readHash{$read}{"3PRIME"}){
+						if ($cnvType =~/del/i) { 
+							# Modify right read
+							my $segaLength = $endCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
 
-						# Modify right read
-						my $segaLength = $endCnv-$readHash{$read}{LEFT}{POS};
-						my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
+							my $segbLength = $readHash{$read}{LEFT}{END}-$endCnv; 
+							my $segmentB = substr($readHash{$read}{LEFT}{SEQ}, $segaLength, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							#print "$newSeq\n";
+						}
+						if ($cnvType =~/dup/i) {
+							my $segaLength = $endCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
 
-						my $segbLength = $readHash{$read}{LEFT}{END}-$endCnv; 
-						my $segmentB = substr($readHash{$read}{LEFT}{SEQ}, $segaLength, $segbLength);
-						my $newSeq = $segmentA . $segmentB;
-						$readHash{$read}{LEFT}{SEQ} = $newSeq;
-						#print "$newSeq\n";
+							my $segbLength = $readHash{$read}{LEFT}{END}-$endCnv; 
+							my $segmentB = substr($seq, $readLength, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							print "6\t$newSeq\n";	
+						} 
 					}	
 				}
 				if ($readHash{$read}{CLASS} eq "LEFT_OVERLAP_RIGHT_OVERLAP"){
 					if ($readHash{$read}{"5PRIME"} && !$readHash{$read}{"3PRIME"} ){
-						my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
-						my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
+						if ($cnvType =~/del/i) {
+							my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
 						
-						#print "raw:$readHash{$read}{LEFT}{SEQ} raw:$readHash{$read}{RIGHT}{SEQ}\n";
+							my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+							my $segmentB = substr($seq, $readLength+1, $segbLength);
+							my $newSeq = $segmentA .  $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
 
-						my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
-						my $segmentB = substr($seq, $readLength+1, $segbLength);
-						my $newSeq = $segmentA . " " .  $segmentB;
-						$readHash{$read}{LEFT}{SEQ} = $newSeq;
-						#print "$newSeq\t";
+							$segaLength = $startCnv-$readHash{$read}{RIGHT}{POS};
+							$segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
 
-						$segaLength = $startCnv-$readHash{$read}{RIGHT}{POS};
-						$segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
+							$segbLength = $readHash{$read}{RIGHT}{END} - $startCnv; 
+							$segmentB = substr($seq, $readLength+1, $segbLength);			
+							$newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						}
+						if ($cnvType =~/dup/i) {
+							# my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+							# my $segmentA = substr($seq, $readLength+$cnvLength-$segaLength, $segaLength);
 
-						$segbLength = $readHash{$read}{RIGHT}{END} - $startCnv; 
-						$segmentB = substr($seq, $readLength+1, $segbLength);			
-						$newSeq = $segmentA . " " . $segmentB;
-						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
-						#print "$newSeq\t$newSeq\n";
-						#print "check $readHash{$read}{CHANGED} $readHash{$read}{LEFT}{CHR}:$readHash{$read}{LEFT}{POS}-$readHash{$read}{LEFT}{END}\t$readHash{$read}{RIGHT}{CHR}:$readHash{$read}{RIGHT}{POS}-$readHash{$read}{RIGHT}{END}\n";
+							# my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+							# my $segmentB = substr($readHash{$read}{LEFT}{SEQ}, $segaLength, $segbLength);
+
+							# my $newSeq = $segmentA . $segmentB;
+							# $readHash{$read}{LEFT}{SEQ} = $newSeq;
+							# print "7 $newSeq\n";
+
+							# $segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+							# $segmentA = substr($readHash{$read}{RIGHT}{SEQ}, 0, $segaLength);
+
+							# $segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+							# $segmentB = substr($seq, $readLength, $segbLength);
+
+							# $newSeq = $segmentA . $segmentB;
+							# $readHash{$read}{RIGHT}{SEQ} = $newSeq;
+							# 						print "8  $readHash{$read}{RIGHT}{END} $endCnv $newSeq\n";
+
+						} 
 					}
 					if ($readHash{$read}{"3PRIME"} && !$readHash{$read}{"5PRIME"} ){
-						my $segaLength = $endCnv-$readHash{$read}{LEFT}{POS};
-						my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
-						#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
-						
-						my $segbLength = $readHash{$read}{LEFT}{END}-$endCnv; 
-						my $segmentB = substr($seq, $readLength, $segbLength);
-						my $newSeq = $segmentA . $segmentB;
-						$readHash{$read}{LEFT}{SEQ} = $newSeq;
-						#print "$newSeq\n";
+						if ($cnvType =~/del/i) {
+							my $segaLength = $endCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
+							#print length($readHash{$read}{RIGHT}{SEQ}) . "\n";
+							
+							my $segbLength = $readHash{$read}{LEFT}{END}-$endCnv; 
+							my $segmentB = substr($seq, $readLength, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							#print "$newSeq\n";
 
-						$segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
-						$segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
+							$segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+							$segmentA = reverse(substr(reverse($seq), $readLength, $segaLength));
 
-						$segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
-						$segmentB = substr($seq, $readLength, $segbLength);
-						$newSeq = $segmentA . $segmentB;
-						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+							$segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+							$segmentB = substr($seq, $readLength, $segbLength);
+							$newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+						} 
 					}
 					if ($readHash{$read}{"5PRIME"} && $readHash{$read}{"3PRIME"} ){
-						# my $segaLength;
-						# my $segmentA;
-						# my $segbLength;
-						# my $segmentB;
-						# my $newSeq;
-						# my $seq =  generateCnvSequence($chrCnv, $startCnv, $endCnv, $cnvType, $readLength, $genomeFasta);
-						my $lenA = length($readHash{$read}{LEFT}{SEQ});
-						my $lenB = length($readHash{$read}{RIGHT}{SEQ});
+						if ($cnvType =~/del/i) {  
+							# my $segaLength;
+							# my $segmentA;
+							# my $segbLength;
+							# my $segmentB;
+							# my $newSeq;
+							# my $seq =  generateCnvSequence($chrCnv, $startCnv, $endCnv, $cnvType, $readLength, $genomeFasta);
+							my $lenA = length($readHash{$read}{LEFT}{SEQ});
+							my $lenB = length($readHash{$read}{RIGHT}{SEQ});
 
-						my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
-						my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
-						my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
-						my $segmentB = substr($seq, $readLength+1, $segbLength);
-						my $newSeq = $segmentA . $segmentB;
-						$readHash{$read}{LEFT}{SEQ} = $newSeq;
-						#print "left $readHash{$read}{LEFT}{SEQ}\t$newSeq\n\n"; 
+							my $segaLength = $startCnv-$readHash{$read}{LEFT}{POS};
+							my $segmentA = substr($readHash{$read}{LEFT}{SEQ}, 0, $segaLength);
+							my $segbLength = $readHash{$read}{LEFT}{END}-$startCnv; 
+							my $segmentB = substr($seq, $readLength+1, $segbLength);
+							my $newSeq = $segmentA . $segmentB;
+							$readHash{$read}{LEFT}{SEQ} = $newSeq;
+							#print "left $readHash{$read}{LEFT}{SEQ}\t$newSeq\n\n"; 
 
-						my $sizeSegA1 = $segaLength;
-						my $sizeSegB1 = $segbLength;
+							my $sizeSegA1 = $segaLength;
+							my $sizeSegB1 = $segbLength;
 
-						$segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
-						$segmentA = reverse(substr( reverse($seq), $readLength, $segaLength));
-						$segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
-						$segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength+1, $segbLength);
-						$newSeq = $segmentA . $segmentB;
-						$readHash{$read}{RIGHT}{SEQ} = $newSeq;
-						#print "right $readHash{$read}{RIGHT}{SEQ}\t$newSeq\n\n";
+							$segaLength = $endCnv-$readHash{$read}{RIGHT}{POS};
+							$segmentA = reverse(substr( reverse($seq), $readLength, $segaLength));
+							$segbLength = $readHash{$read}{RIGHT}{END}-$endCnv; 
+							$segmentB = substr($readHash{$read}{RIGHT}{SEQ}, $segaLength+1, $segbLength);
+							$newSeq = $segmentA . $segmentB;
+							$readHash{$read}{RIGHT}{SEQ} = $newSeq;
+							#print "right $readHash{$read}{RIGHT}{SEQ}\t$newSeq\n\n";
 
-						my $sizeSegA2 = $segaLength;
-						my $sizeSegB2 = $segbLength;
+							my $sizeSegA2 = $segaLength;
+							my $sizeSegB2 = $segbLength;
 
-						if ($sizeSegA2 >= $sizeSegA1 or $sizeSegB1 >= $sizeSegB2){
+							if ($sizeSegA2 >= $sizeSegA1 or $sizeSegB1 >= $sizeSegB2){
 
-							my $segLeft = $readHash{$read}{LEFT}{SEQ};
-							my $segRight= $readHash{$read}{RIGHT}{SEQ};
-							$readHash{$read}{LEFT}{SEQ} = $segRight;
-							$readHash{$read}{RIGHT}{SEQ} = $segLeft;
+								my $segLeft = $readHash{$read}{LEFT}{SEQ};
+								my $segRight= $readHash{$read}{RIGHT}{SEQ};
+								$readHash{$read}{LEFT}{SEQ} = $segRight;
+								$readHash{$read}{RIGHT}{SEQ} = $segLeft;
+							}
 						}  
-						if ($read eq 'M03954:226:000000000-CT6B3:1:1111:9450:6534'){
-							print "$lenA $lenB A2-$sizeSegA2 A1-$sizeSegA1 B1-$sizeSegB1  B2-$sizeSegB2\n"; 
-							print "seems here\n"; exit;
-						} 
-						if ($read eq 'M03954:226:000000000-CT6B3:1:2119:25640:19220'){
-							print "$lenA $lenB A2-$sizeSegA2 A1-$sizeSegA1 B1-$sizeSegB1  B2-$sizeSegB2\n"; 
-							print "seems here\n"; exit;
-						} 
 					}	
 				} 
 			}
@@ -824,7 +949,8 @@ print "\n Usage: perl $0 <options>
  Options:
  -b,--bed      STRING   ROI bed
  -g,--genome   STRING   Genome file in FASTA format
- -c,--config   STRING   Config file with a CNV list\n\n";
+ -c,--config   STRING   Config file with a CNV list
+ -o,--outdir   STRING   Output directory\n\n";
  exit;
 }
 
