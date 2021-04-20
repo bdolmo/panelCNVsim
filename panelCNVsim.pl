@@ -139,8 +139,8 @@ foreach my $bam ( natsort keys %HoS ) {
 		my $ploidy  = $tmp[5];
 		my $mode    = $tmp[6];
 
-		my $startOffset = $startCnv-250;
-		my $endOffset   = $endCnv+250;
+		my $startOffset = $startCnv;
+		my $endOffset   = $endCnv;
 
 		# Extract reads overlapping the CNV coordinates	
 		my $roiReads = `$samtools view $bam $chrCnv:$startOffset-$endOffset`;
@@ -237,10 +237,6 @@ foreach my $bam ( natsort keys %HoS ) {
 
 		foreach my $read (sort keys %ReadName){
 
-			if ($ReadName{$read}{COUNT} < 2) {
-				print " SKIPPING $read\n";
-				next;
-			} 
 			$ReadName{$read}{CNVTYPE} = $cnvType; 
 			# Both reads outisde the variant 
 			if ($ReadName{$read}{LEFT}{END} <= $startCnv && $ReadName{$read}{RIGHT}{POS} >= $endCnv){ 

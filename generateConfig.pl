@@ -94,8 +94,8 @@ if (!@bams) {
 	exit;
 }
 
-my @ARRAY = ();
-my %Exon  = ();
+my @ARRAY      = ();
+my %Exon       = ();
 our %ExonCount = ();
 our %GeneHash  = ();
 our %seen_gene = ();
@@ -121,7 +121,7 @@ while (my $line=<IN>) {
 	} 
 
 	$ExonCount{$gene}++;
-	$GeneHash{$gene}{$ExonCount{$gene}} = "$tmp[0]\t$tmp[1]\t$tmp[2]\n";
+	$GeneHash{$gene}{$ExonCount{$gene}} = "$tmp[0]\t$tmp[1]\t$tmp[2]";
 	push @ARRAY, $line;
 }
 close IN;
@@ -216,14 +216,18 @@ sub getMultipleExon {
 	my $selectedGene;
 	my $counter = 0;
 
+	my $firstExon = "";
+	my $lastExon  = "";
+
 	while (1) {
 		$counter++;
-		if ($counter == scalar @ARRAY) {
+		my $index = int (rand (scalar @ARRAY));
+
+		if ($counter == scalar @ARRAY || $index+$chosen_N > scalar @ARRAY ) {
 			$chosen_N-- if $chosen_N >= 2;
 			$counter = 0;
 		}
 
-		my $index = int (rand (scalar @ARRAY));
 		my ($chr, $start, $end, $info) = split (/\t/, $ARRAY[$index]);
 		my $gene = $info;
 		if ($gene =~/.{1,}_.{1,}_.{1,}_.{1,};.{1,}$/) {
@@ -231,22 +235,35 @@ sub getMultipleExon {
 			$gene = $tmpGene[1]; 
 		} 
 
+		my $selectedExon = "";
+		foreach my $exon (natsort keys %{ $GeneHash{$gene} } ){
+			my $check = "$chr\t$start\t$end";
+			if ($GeneHash{$gene}{$exon} eq $check) {
+				$selectedExon = $exon;
+				last;
+			} 
+		}
+		if ($selectedExon) {
+			if ($selectedExon+$chosen_N > $ExonCount{$gene}){
+				next;
+			} 
+		}
+		else {
+			next;
+		} 
+
 		if ($ExonCount{$gene} >= $chosen_N) {
+
+			$firstExon = $selectedExon;
+			$lastExon  = $selectedExon+$chosen_N;
 			$selectedGene = $gene;
 
-			$seen_gene{$gene}++;
 			my ($chrPrev, $startPrev, $endPrev, $infoPrev) = split (/\t/, $ARRAY[$index-1]);
-			my ($chrNext, $startNext, $endNext, $infoNext) = split (/\t/, $ARRAY[$index+1]);
-
-			if ($seen_gene{$gene} > 1) {
-				next;
-			}
-			else {
-				last;
-			}
+			my ($chrNext, $startNext, $endNext, $infoNext) = split (/\t/, $ARRAY[$index+$chosen_N]);
 
 			if ($chr eq $chrPrev && $chr eq $chrNext){
-				if ($start > $endPrev+500 && $startNext > $end+500){
+
+				if ($start > $endPrev+2000 && $startNext > $end+2000){
 					$seen{$ARRAY[$index]}++;
 					last;
 				}  
@@ -259,16 +276,19 @@ sub getMultipleExon {
 		push @tmp, $GeneHash{$selectedGene}{$exon}; 
 	}
 
-	my @sortedTmp = natsort @tmp[0..$chosen_N-1];
+	#my @sortedTmp = natsort @tmp[0..$chosen_N-1];
+
+	my @sortedTmp = natsort @tmp[$firstExon-1..$lastExon-1];
+
 
 	my $chr = ( split /\t/, $sortedTmp[0] )[0];
 	my $initial = ( split /\t/, $sortedTmp[0] )[1];
 	my $final   = ( split /\t/, $sortedTmp[-1] )[2];   
 
-	$initial = $initial-500;
-	$final   = $final+500;
+	$initial = $initial-2000;
+	$final   = $final+2000;
 
-	return ($chr, $initial, $final, "$selectedGene\_1_to_$chosen_N");
+	return ($chr, $initial, $final, "$selectedGene\_$firstExon\_to_$lastExon");
 }
 
 ##############
